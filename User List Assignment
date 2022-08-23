@@ -1,0 +1,202 @@
+USE [CapitalPlanningSystems]
+GO
+
+/****** Object:  StoredProcedure [dbo].[spCP_ManageUserPageLoad]    Script Date: 8/23/2022 10:25:35 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+-- exec spCP_ManageUserPageLoad  'will'
+CREATE procedure [dbo].[spCP_ManageUserPageLoad] (@Search nvarchar(255))
+as
+begin
+
+-- To drop the temp table if it is already exists
+if object_id('tempdb..#temp1','U') is not null
+drop table #temp1
+if object_id('tempdb..#temp2','U') is not null
+drop table #temp2
+if object_id('tempdb..#temp3','U') is not null
+drop table #temp3
+if object_id('tempdb..#temp4','U') is not null
+drop table #temp4
+
+ 
+-- to select the corporate role users from table
+-- higher level roles are selected and stored in #temp1 table
+;with cte as (
+select distinct 
+CorpInitialID as ApproverID,corpinitialname as ApproverName 
+, CorpInitialUserName as ApproverUserName, '5' as ApproverRole
+from
+tbl_ManageCorporate 
+where IsDelete = 0
+and CorpInitialID Is Not NULL
+union 
+select distinct 
+CorpFinalID as ApproverID,corpfinalname,CorpFinalUserName,'6' as Rolename from
+tbl_ManageCorporate
+where IsDelete = 0
+and CorpFinalID Is Not NULL
+union
+select distinct 
+CorpViewOnlyID as ApproverID,corpviewonlyname,CorpviewonlyUserName,'2' as Rolename from
+tbl_ManageCorporate
+where IsDelete = 0
+and CorpViewOnlyID Is Not NULL
+) 
+select distinct PD.ApproverID, PD.ApproverName  , PD.ApproverUserName  , PD.ApproverRole 
+into #temp1
+from cte AS PD
+LEFT OUTER JOIN cte AS PD1
+ON (PD.ApproverID= PD1.ApproverID 
+AND PD.ApproverRole < PD1.ApproverRole)
+where PD1.ApproverRole is null
+
+ 
+
+ --select * from #temp1
+
+ 
+
+ 
+ 
+-- to select the subsidiary role users from table
+-- higher level roles are selected and stored in #temp2 table
+
+ 
+
+;with cte as (
+select distinct 
+SubInitialID as ApproverID, subinitialname as ApproverName  , subInitialUserName as ApproverUserName
+, '3' as  ApproverRole from
+tbl_ManageSubsidiarys 
+where IsDelete = 0
+and SubInitialID Is Not NULL
+union 
+select distinct 
+SubFinalID as ApproverID, subfinalname,subFinalUserName,'4' as Rolename from
+tbl_ManageSubsidiarys
+where IsDelete = 0
+and SubFinalID Is Not NULL
+union 
+select distinct 
+SubViewOnlyID as ApproverID, subviewonlyname,subviewonlyUserName,'1' as Rolename from
+tbl_ManageSubsidiarys
+where IsDelete = 0
+and SubViewOnlyID Is Not NULL
+) 
+select distinct PD.ApproverID, PD.ApproverName  , PD.ApproverUserName  , PD.ApproverRole 
+into #temp2
+from cte AS PD
+LEFT OUTER JOIN cte AS PD1
+ON (PD.ApproverID= PD1.ApproverID 
+AND PD.ApproverRole < PD1.ApproverRole)
+where PD1.ApproverRole is null
+--select * from #temp2
+ 
+ -- To get the combined result of both corporate and subsidiary roles
+ -- and get the highest role
+ ; with cte as(
+ select ApproverID, ApproverName,ApproverUserName,ApproverRole from #temp1
+ union all
+ select ApproverID, ApproverName,ApproverUserName,ApproverRole from #temp2
+ )
+ select U.ApproverID, U.ApproverName,U.ApproverUserName,U.ApproverRole into #temp3 from cte AS U
+LEFT OUTER JOIN cte AS U1
+ON (U.ApproverID= U1.ApproverID 
+AND U.ApproverRole < U1.ApproverRole)
+where U1.ApproverRole is null
+--select * from #temp3
+
+ 
+
+-- To get exiting admin and other users
+;with cte as(
+
+Select    
+         AdminUserID as ApproverID,
+         AdminName as ApproverName
+        ,AdminUserName as ApproverUserName
+        ,'Admin' as ApproverRole
+from tbl_Admin
+where IsDelete = 0
+union all
+select ApproverID,ApproverName, ApproverUserName
+,case when ApproverRole = '6' then 'Corportate Final Approver'
+when ApproverRole = '5' then 'Corportate Initial Approver'
+when ApproverRole = '4' then 'Subsidiary Final Approver'
+when ApproverRole = '3' then 'Subsidiary Initial Approver'
+when ApproverRole = '2' then 'Corportate View Only'
+when ApproverRole = '1' then 'Subsidiary View Only' end as ApproverRole
+from #temp3 where  ApproverName != 'NULL'
+AND ApproverID not in (Select AdminUserID from tbl_Admin where IsDelete = 0)
+)
+select U.ApproverID, U.ApproverName,U.ApproverUserName,U.ApproverRole into #temp4 from cte
+ AS U
+LEFT OUTER JOIN cte AS U1
+ON (U.ApproverID= U1.ApproverID 
+AND U1.ApproverRole < U1.ApproverRole)
+where U1.ApproverRole is null
+
+
+
+
+
+ If (@Search = 'PageLoad')
+begin
+begin transaction
+select a.ApproverID as ApproverID, a.ApproverName as ApproverName, a.ApproverUserName as ApproverUserName,a.ApproverRole as ApproverRole
+from(
+select distinct * from #temp4
+UNION 
+select UserID, UserName, UserEmail, 'Initiator' as Role from tbl_OktaUsers
+where UserID NOT IN (select ApproverID from #temp4)) a
+order by ApproverName asc
+
+
+commit
+end
+
+If (@Search != 'PageLoad')
+begin
+begin transaction
+
+select a.ApproverID as ApproverID, a.ApproverName as ApproverName, a.ApproverUserName as ApproverUserName,a.ApproverRole as ApproverRole
+from(
+select distinct * from #temp4
+UNION 
+select UserID as ApproverID, UserName as ApproverName, UserEmail as ApproverUserName, 'Initiator' as ApproverRole from tbl_OktaUsers
+where UserID NOT IN (select ApproverID from #temp4) ) a
+where  ApproverName  LIKE (LTRIM(@Search)+'%')
+OR ApproverRole LIKE (LTRIM(@Search)+'%')
+order by ApproverName asc
+commit
+end
+ 
+
+
+
+select AdminUserID as ApproverID, AdminUserName as ApproverUserName from tbl_Admin where IsDelete = 0
+
+select distinct * from #temp4
+UNION 
+select UserID, UserName, UserEmail, 'Initiator' as Role from tbl_OktaUsers
+where UserID NOT IN (select ApproverID from #temp4)
+
+
+drop table #temp1
+drop table #temp2
+drop table #temp3
+drop table #temp4
+
+end
+
+
+GO
+
